@@ -1,0 +1,166 @@
+{
+  "name": "K2 Horizon Starter Workflow",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "a1b2c3d4-0001-4000-8000-000000000001",
+      "name": "Start Here",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [300, 300]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "a1b2c3d4-1001-4000-8000-000000000001",
+              "name": "prompt",
+              "value": "Give me 3 creative automation ideas I can build with n8n.",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a1b2c3d4-0002-4000-8000-000000000002",
+      "name": "Your Prompt",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [520, 300],
+      "notes": "✏️ Replace the prompt text with your own prompt!",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.ifm.ai/v1/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer YOUR_IFM_API_KEY"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ \"model\": \"IFM/K2-Horizon-375B-A23B\", \"messages\": [ { \"role\": \"user\", \"content\": $json.prompt } ] }) }}",
+        "options": {}
+      },
+      "id": "a1b2c3d4-0003-4000-8000-000000000003",
+      "name": "K2 Horizon",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [760, 300],
+      "notes": "🔑 Replace YOUR_IFM_API_KEY in the Authorization header",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "a1b2c3d4-1004-4000-8000-000000000004",
+              "name": "response",
+              "value": "={{ $json.choices[0].message.content }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a1b2c3d4-0004-4000-8000-000000000004",
+      "name": "K2 Response",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [1000, 300]
+    },
+    {
+      "parameters": {
+        "content": "## 👋 Start here!\n\n1. Open the **K2 Horizon** node\n2. Replace **YOUR_IFM_API_KEY** with your K2 Horizon API key\n3. Edit the prompt in **Your Prompt** if you want\n4. Click **Execute Workflow**",
+        "height": 300,
+        "width": 320,
+        "color": 4
+      },
+      "id": "a1b2c3d4-0005-4000-8000-000000000005",
+      "name": "Sticky Note - Start Here",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-60, 160]
+    },
+    {
+      "parameters": {
+        "content": "## 🔐 Never share your API key or commit it to a public repository.\n\nPasting your key here is fine for this hackathon starter. For any workflow you plan to share publicly, store the key in **n8n Credentials** (e.g. a Header Auth credential) or an **environment variable** instead.",
+        "height": 280,
+        "width": 300,
+        "color": 3
+      },
+      "id": "a1b2c3d4-0006-4000-8000-000000000006",
+      "name": "Sticky Note - API Key Security",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [640, -20]
+    },
+    {
+      "parameters": {
+        "content": "## 🎉 If you see a response here, you're connected!\n\nNow replace the Manual Trigger with any n8n trigger and start building your automation.",
+        "height": 220,
+        "width": 300,
+        "color": 6
+      },
+      "id": "a1b2c3d4-0007-4000-8000-000000000007",
+      "name": "Sticky Note - Success",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [960, 460]
+    }
+  ],
+  "connections": {
+    "Start Here": {
+      "main": [
+        [
+          {
+            "node": "Your Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Your Prompt": {
+      "main": [
+        [
+          {
+            "node": "K2 Horizon",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "K2 Horizon": {
+      "main": [
+        [
+          {
+            "node": "K2 Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "tags": []
+}

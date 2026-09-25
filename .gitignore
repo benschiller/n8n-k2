@@ -1,0 +1,8 @@
+# Secrets - never commit
+.env
+
+# Local tool config
+.kilo/
+
+# OS noise
+.DS_Store
