@@ -1,38 +1,33 @@
 # Dubai Rent Renewal Negotiator
 
-An [n8n](https://n8n.io/) chat workflow, powered by **K2 Horizon**, that helps Dubai tenants negotiate their lease renewal: it scrapes live comparable listings from Bayut, reasons about whether the current rent is fair, drafts a polite negotiation email, pauses for your review in the chat, then delivers a bilingual (Arabic + English) email ready to send.
+An [n8n](https://n8n.io/) chat workflow, powered by **K2 Horizon**, that helps Dubai tenants negotiate their lease renewal: it pulls live DLD-registered rental transactions for the tenant's area via RapidAPI, reasons about whether the current rent is fair, drafts a polite negotiation email in Arabic, then posts it back into the chat ready to copy into your mail client.
 
 **Live workflow (published):** https://benschiller.app.n8n.cloud/workflow/355PFlJoG8wOOL7e
 
 ## How it works
 
 ```text
-Chat Trigger ──▶ K2 Parse Request ──▶ Apify Fetch Bayut Comps ──▶ Shape Market Data
-                                                                      │
-                       (pauses until you reply: APPROVE or your edit) │
-K2 Fairness Verdict ◀─────────────────────────────────────────────────┘
-      │
-      ▼
-K2 Draft Email ──▶ Review Draft (Chat, sendAndWait) ──▶ Approved or Edited? (IF)
-                                                            │ true: reuse draft
-                                                            │ false: use edited text
-                                                            ▼
-                              K2 Translate Arabic ──▶ K2 Safety Check ──▶ Send Final Email
+Chat Trigger ──▶ K2 Parse Request ──▶ Resolve Location ──▶ Fetch Transactions ──▶ Shape Market Data
+                                                                                        │
+                                                                                        ▼
+Copy Email ◀── Output Arabic Email Text ◀── K2 Draft Email ◀── K2 Fairness Verdict ◀────┘
 ```
+
+The canvas is organised into four labeled groups: **Parse & Locate**, **Market Scan**, **Fairness Analysis & Draft**, **Deliver negotiation email**.
+
+> **No human-in-the-loop review — intentional.** An earlier build paused at a review gate (Chat `sendAndWait`: type `APPROVE` or paste your edited email). For ease of judging and to speed the demo to conclusion that step was eliminated; the drafted email is delivered straight to the chat. A sticky note on the canvas says the same.
 
 | Node | Type | What it does |
 | --- | --- | --- |
 | On New Chat Message | Chat Trigger (v1.5) | Hosted chat, `responseMode: responseNodes`; receives the free-text description of your home and rent |
-| K2 Parse Request | HTTP Request | K2 Horizon extracts `area`, `areaSlug`, `bedrooms`, `bathrooms`, `areaSqft`, `annualRentAED` and builds the Bayut `searchUrl` (city-wide fallback if the area can't be resolved) |
-| Apify Fetch Bayut Comps | HTTP Request | Runs `gio21/bayut-property-scraper` synchronously (flat actor input `{searchUrl, maxItems: 24}`); returns the dataset items themselves |
-| Shape Market Data | Set (`executeOnce`) | Single-item choke point: compact comps JSON (tolerates a bare array **or** a `{data:{items}}` envelope), the parse JSON, and the original message |
-| K2 Fairness Verdict | HTTP Request | Verdict (fair / above / below market), % vs the comps median, 3–5 cited listings with prices, a recommended target range |
-| K2 Draft Email | HTTP Request | Polite, culturally appropriate English negotiation email referencing the real listings |
-| Review Draft | Chat (`sendAndWait`, freeText) | Sends the draft into the chat and **pauses the execution** until you reply |
-| Approved or Edited? | IF | True when the trimmed, uppercased reply is `APPROVE` → reuse the draft; otherwise the reply is the edited email |
-| K2 Translate Arabic | HTTP Request | Modern Standard Arabic translation + an English gloss after `---ENGLISH GLOSS---` |
-| K2 Safety Check | HTTP Request | Quality gate: checks tone/formality and translation accuracy, returns the final approved plain text |
-| Send Final Email | Chat (`send`) | Delivers the Arabic email + English gloss as a copy/paste message |
+| K2 Parse Request | HTTP Request | K2 Horizon extracts `area`, `bedrooms`, `bathrooms`, `areaSqft` and `annualRentAED` from the message |
+| Resolve Location | HTTP Request | `GET /autocomplete` resolves the stated area to a location externalID (e.g. Dubai Marina → `5003`); city-wide fallback if the area can't be resolved |
+| Fetch Transactions | HTTP Request | Queries DLD-registered Ejari rental transactions (`GET /transactions`: `purpose=for-rent`, `location_ids=<externalID>`, `beds`, `area_min/max` in sqft); returns registered rents with tower, date and New/Renewal status |
+| Shape Market Data | Set (`executeOnce`) | Single-item choke point: compact comps JSON (`rentAED`, `bedrooms`, `areaSqft`, tower, date), the parse JSON, and the original message |
+| K2 Fairness Verdict | HTTP Request | Verdict (fair / above / below market), % vs the transactions median, 3–5 cited transactions with registered rents, a recommended target range |
+| K2 Draft Email | HTTP Request | Polite, culturally appropriate Arabic negotiation email referencing the real transactions (subject line first, no preamble) |
+| Output Arabic Email Text | Set | Unwraps the drafted email out of the K2 response into a plain `emailText` field |
+| Copy Email | Chat (`send`) | Posts the finished Arabic email back into the chat for copy/paste |
 
 ## Example run (verified live)
 
@@ -45,35 +40,36 @@ i live in dubai marina, 1 bed / 1 bath, 900 sq ft. i pay aed 160k / yr
 K2 parse output:
 
 ```json
-{"area":"Dubai Marina","areaSlug":"dubai-marina","bedrooms":1,"bathrooms":1,"areaSqft":900,"annualRentAED":160000,"searchUrl":"https://www.bayut.com/for-rent/property/dubai/dubai-marina/"}
+{"area":"Dubai Marina","areaSlug":"dubai-marina","bedrooms":1,"bathrooms":1,"areaSqft":900,"annualRentAED":160000}
 ```
 
-After typing `APPROVE` at the review step, the final delivery is the safety-checked bilingual email (Arabic first, then `---ENGLISH GLOSS---`, then the English gloss) — 2,307 characters in the verified run.
+The chat reply is the finished Arabic email (subject line first) — copy it into your mail client.
 
 ## Setup (from a clean n8n instance)
 
 1. In n8n, import [`workflow.json`](workflow.json) (workflow menu → **Import from File**).
 2. Create two credentials (**Credentials → Add credential → "Header Auth"** — create from the Credentials page, not from inside a node):
    - **IFM K2 Horizon API** — Name: `Authorization`, Value: `Bearer <your K2 Horizon API key>`
-   - **Apify API** — Name: `Authorization`, Value: `Bearer <your Apify token>`
-3. Open each HTTP Request node and select the matching credential in the dropdown (the 5 K2 nodes → IFM credential; the Apify node → Apify credential).
+   - **RapidAPI Key** — Name: `x-rapidapi-key`, Value: `<your RapidAPI key>` (subscribed to `happyendpoint/uae-real-estate3` on the hub, otherwise every call 403s)
+3. Open each HTTP Request node and select the matching credential in the dropdown (the K2 nodes → IFM credential; Resolve Location and Fetch Transactions → RapidAPI Key). Both RapidAPI nodes also enable **Send Headers** with `x-rapidapi-host: uae-real-estate3.p.rapidapi.com` (the host is public, not a secret — Header Auth only carries one header).
 4. Open the chat (the workflow's chat panel, or n8n Chat Hub) and describe your home, e.g. the message above.
-5. At the review step, paste your edited email or type `APPROVE` (the wait limit is 45 minutes by default).
-6. Copy the final bilingual email into your own mail client.
+5. Copy the Arabic email the chat replies with into your own mail client.
 
 > **Why credentials and not env vars?** Verified live on n8n Cloud: `$env` access in expressions is blocked (`access to env vars denied`) and environment variables cannot be set from the Cloud dashboard. Header Auth credentials keep the keys out of the workflow JSON, so this repository contains no secrets.
 
 ## Design notes
 
-- **K2 Horizon**: all 5 LLM steps POST to `https://api.ifm.ai/v1/chat/completions` with model `IFM/K2-Horizon-375B-A23B` (OpenAI-compatible). Request bodies are built with a single `JSON.stringify({...})` expression so arbitrary user text cannot break the JSON. 240 s timeout per call.
-- **Apify**: the actor runs synchronously via `POST /v2/actors/gio21~bayut-property-scraper/run-sync-get-dataset-items` — the POST payload is passed to the actor as its input directly (verified against the Apify API docs), and the response is the dataset items themselves. The node carries `alwaysOutputData` so an empty/captcha scrape still flows into a graceful model answer instead of dead-ending the chat. 300 s timeout (Apify answers 408 at 300 s).
-- **Robust parsing**: the parse output's `searchUrl` is extracted with a regex (not `JSON.parse`), so markdown fences or model chatter cannot break the scrape request.
-- **Fallback scraper**: Bayut uses DataDome anti-bot protection; `gio21` has no stated bypass. If the scrape returns a captcha page or no items, swap the actor for `get_anything/bayut-property-scraper` (Camoufox-based, ~$6 per 1,000 results) and keep the same flat input.
+- **K2 Horizon**: all 3 LLM steps POST to `https://api.ifm.ai/v1/chat/completions` with model `IFM/K2-Horizon-375B-A23B` (OpenAI-compatible). Request bodies are built with a single `JSON.stringify({...})` expression so arbitrary user text cannot break the JSON. Capped `max_tokens` per step (parse 500, verdict 800, draft 1500) with low temperatures (0 / 0.2 / 0.6). 240 s timeout per call; all three retry 3× (5 s apart) on transient failures.
+- **RapidAPI transactions**: `GET /transactions` on `uae-real-estate3.p.rapidapi.com` with `purpose=for-rent`, `location_ids=<autocomplete externalID>`, `beds`, `area_min/max` in sqft (see [`docs/rapidapi-transactions.md`](docs/rapidapi-transactions.md)). Bedroom filter uses `beds` (`rooms` is ignored); records carry no bathroom field, so baths can't filter. Auth needs two headers (`x-rapidapi-key` credential + `x-rapidapi-host` send-header). 24 results/page. No scraping, no bot wall — DLD-registered Ejari data.
+- **Location resolution**: the area name is resolved via `GET /autocomplete` and its `externalID` (e.g. Dubai Marina → `5003`); the numeric `id` is ignored by the transactions filter.
+- **Tight comps**: same area + same beds + sqft window ±20% around the tenant's size (e.g. 700–1100 for 900 sqft). Marina 1-beds, Sep 2026: broad median AED 87k, size-matched median AED 100k.
 
 ## What was tested
 
-- **Graph tests** with pinned data: comps shaping (array and envelope shapes) and both gate branches (`APPROVE` and an edited reply) route correctly.
-- **Live end-to-end run** (5 real K2 Horizon calls; scraper pinned to sample data): success in ~3.5 minutes — parse, verdict, draft, translation, and the final safety-checked bilingual email.
+- **Graph tests** with pinned data: comps shaping (array and envelope shapes) feeds the verdict prompt correctly.
+- **Live data check**: RapidAPI `/transactions` queried directly from the local machine — Dubai Marina 1-beds, 20/20 area-matched, all registered within days (broad median AED 87k, size-matched median AED 100k). Full contract in [`docs/rapidapi-transactions.md`](docs/rapidapi-transactions.md).
+- **K2 step tests** (each node's exact prompt, direct calls): parse ~7s, verdict cites live comps (60% above market, median 100k, towers named), draft ~15s. All three K2 nodes retry 3× (5s apart) on transient 503s.
+- **End-to-end run** (exec 20, live, earlier build that still had the review gate): parse 6.0s → resolve 0.4s → fetch 2.1s → verdict 12.8s → draft 14.0s, zero errors. Draft needed one fix first: at temp 0.7 the model burned 1000 tokens on exposed reasoning (`finish_reason=length`, no email); temp 0.2 + an explicit output rule now yields a clean Subject-first email.
 - **Key validity check**: the K2 API was called directly from the local machine with the Bearer header (HTTP 200).
 
 ## Repository layout
@@ -83,6 +79,7 @@ After typing `APPROVE` at the review step, the final delivery is the safety-chec
 ├── workflow.json                        # Importable n8n workflow (the actual code)
 ├── docs/
 │   ├── dubai-rent-negotiator-plan.md    # Build spec, kept up to date with build-time findings
+│   ├── rapidapi-transactions.md         # Live comps API contract (params, field map, verified queries)
 │   └── K2-Horizon-Starter-Workflow.json # Minimal K2 request starter (placeholders only)
 ├── .env                                 # Local secrets; gitignored
 ├── .gitignore

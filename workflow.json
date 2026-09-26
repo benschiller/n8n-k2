@@ -1,1 +1,469 @@
-{"name": "Dubai Rent Renewal Negotiator", "nodes": [{"parameters": {"options": {"responseMode": "responseNodes", "inputPlaceholder": "Tell me about your home and your current rent...", "subtitle": "Describe your residence and current annual rent, e.g. i live in dubai marina, 1 bed / 1 bath, 900 sq ft. i pay aed 160k / yr", "title": "Dubai Rent Renewal Negotiator"}, "public": false}, "id": "64fd1fe3-2466-49a0-aa3c-fbaa595f869b", "name": "On New Chat Message", "type": "@n8n/n8n-nodes-langchain.chatTrigger", "typeVersion": 1.5, "position": [-128, 304], "webhookId": "a2c525fd-58bc-49dc-b816-63b9ed788b40"}, {"parameters": {"method": "POST", "url": "https://api.ifm.ai/v1/chat/completions", "authentication": "genericCredentialType", "genericAuthType": "httpHeaderAuth", "sendBody": true, "specifyBody": "json", "jsonBody": "={{ JSON.stringify({ model: 'IFM/K2-Horizon-375B-A23B', messages: [{ role: 'user', content: 'You extract structured data from a message about a Dubai apartment lease renewal.\\n\\nRespond with ONLY one JSON object - no markdown fences and no commentary - with exactly these keys:\\narea: area name in Dubai as stated or best inferred, or an empty string if unknown\\nareaSlug: lowercase hyphenated Bayut area slug (examples: dubai-marina, downtown-dubai, jumeirah-lake-towers, business-bay, palm-jumeirah, dubai-hills-estate, jumeirah-beach-residence, al-barsha, the-greens, motor-city, al-furjan, deira, bur-dubai), or an empty string if the area cannot be resolved\\nbedrooms: integer number of bedrooms (0 for a studio)\\nbathrooms: integer number of bathrooms, or 0 if not stated\\nareaSqft: integer size in square feet, or 0 if not stated\\nannualRentAED: the CURRENT annual rent in AED as an integer - accept formats like 160k, 160,000 or a monthly figure which you multiply by 12 - or 0 if not stated\\nsearchUrl: https://www.bayut.com/for-rent/property/dubai/<areaSlug>/ when areaSlug is known, otherwise https://www.bayut.com/for-rent/property/dubai/\\n\\nUSER MESSAGE:\\n' + ($json.chatInput || '') }] }) }}", "options": {"timeout": 240000}}, "id": "32fc8084-d4fe-4e69-8993-2d5b44d92f64", "name": "K2 Parse Request", "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.5, "position": [48, 112], "credentials": {"httpHeaderAuth": {"id": "utoIEk5C6frUgZIr", "name": "IFM K2 Horizon API"}}}, {"parameters": {"method": "POST", "url": "https://api.apify.com/v2/actors/gio21~bayut-property-scraper/run-sync-get-dataset-items", "authentication": "genericCredentialType", "genericAuthType": "httpHeaderAuth", "sendBody": true, "specifyBody": "json", "jsonBody": "={{ JSON.stringify({ searchUrl: (() => { const raw = $('K2 Parse Request').first().json.choices[0].message.content || ''; const m = raw.match(/\"searchUrl\"\\s*:\\s*\"([^\"]+)\"/); const fallback = 'https://www.bayut.com/for-rent/property/dubai/'; return (m && m[1] && m[1].indexOf('bayut.com') > -1) ? m[1] : fallback; })(), maxItems: 24 }) }}", "options": {"timeout": 300000}}, "id": "76cb718b-6461-4ae3-a9e1-831aeff45d36", "name": "Apify Fetch Bayut Comps", "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.5, "position": [448, 304], "alwaysOutputData": true, "credentials": {"httpHeaderAuth": {"id": "JzzmGcjZywtCRguK", "name": "Apify API"}}}, {"parameters": {"assignments": {"assignments": [{"id": "comps-json", "name": "compsJson", "type": "string", "value": "={{ (() => { const all = $('Apify Fetch Bayut Comps').all().map(i => i.json); const src = (all.length && Array.isArray(all[0])) ? all[0] : ((all.length && all[0] && all[0].data && Array.isArray(all[0].data.items)) ? all[0].data.items : all); const items = src.filter(i => i && (i.price !== undefined || i.priceFormatted || i.listingUrl || i.url)); return JSON.stringify(items.slice(0, 24).map(i => ({ price: i.price, priceFormatted: i.priceFormatted || i.price, bedrooms: i.bedrooms, bathrooms: i.bathrooms, area: i.area, listingUrl: i.listingUrl || i.url || '' }))); })() }}"}, {"id": "lease-data", "name": "leaseData", "type": "string", "value": "={{ $('K2 Parse Request').first().json.choices[0].message.content }}"}, {"id": "user-message", "name": "userMessage", "type": "string", "value": "={{ $('On New Chat Message').first().json.chatInput }}"}]}, "options": {}}, "id": "8a13d4df-c0c3-40a4-b644-0b1ceee50467", "name": "Shape Market Data", "type": "n8n-nodes-base.set", "typeVersion": 3.5, "position": [672, 304], "executeOnce": true}, {"parameters": {"method": "POST", "url": "https://api.ifm.ai/v1/chat/completions", "authentication": "genericCredentialType", "genericAuthType": "httpHeaderAuth", "sendBody": true, "specifyBody": "json", "jsonBody": "={{ JSON.stringify({ model: 'IFM/K2-Horizon-375B-A23B', messages: [{ role: 'user', content: 'You are a Dubai rental market analyst advising a tenant about a lease renewal.\\n\\nTENANT LEASE DATA (JSON with area, bedrooms, bathrooms, areaSqft, annualRentAED):\\n' + ($json.leaseData || '') + '\\n\\nCOMPARABLE LISTINGS (JSON array, live results from Bayut for this area):\\n' + ($json.compsJson || '') + '\\n\\nProduce a concise market verdict:\\n1. VERDICT: fair, above market, or below market.\\n2. PERCENTAGE: the approximate percentage difference between the annual rent and the median of the comparable listings - state the median value.\\n3. EVIDENCE: cite 3 to 5 specific comparable listings with price, bedrooms, area and listing URL.\\n4. RECOMMENDED RANGE: a reasonable target annual rent range in AED for the negotiation.\\n\\nOnly use the listings provided - never invent listings or prices. If the comparable list is empty, say clearly that live data was unavailable and give a cautious qualitative answer based only on the lease data. Keep the whole analysis under 250 words.' }] }) }}", "options": {"timeout": 240000}}, "id": "ee8a39db-cec9-4309-a60c-fc5c1de44203", "name": "K2 Fairness Verdict", "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.5, "position": [880, 128], "credentials": {"httpHeaderAuth": {"id": "utoIEk5C6frUgZIr", "name": "IFM K2 Horizon API"}}}, {"parameters": {"method": "POST", "url": "https://api.ifm.ai/v1/chat/completions", "authentication": "genericCredentialType", "genericAuthType": "httpHeaderAuth", "sendBody": true, "specifyBody": "json", "jsonBody": "={{ JSON.stringify({ model: 'IFM/K2-Horizon-375B-A23B', messages: [{ role: 'user', content: 'You draft polite, persuasive rent renewal negotiation emails for tenants in Dubai.\\n\\nUSER CONTEXT (original message):\\n' + $('Shape Market Data').first().json.userMessage + '\\n\\nMARKET ANALYSIS:\\n' + $('K2 Fairness Verdict').first().json.choices[0].message.content + '\\n\\nCOMPARABLE LISTINGS (JSON):\\n' + $('Shape Market Data').first().json.compsJson + '\\n\\nDraft a professional, respectful email in English to the landlord about the rent renewal. Requirements:\\n- Reference specific comparable listings as evidence, with prices and listing URLs where useful.\\n- If the rent is above market, request a reduction or a capped increase, citing the evidence.\\n- If the rent is fair, confirm the renewal warmly.\\n- If the rent is below market, acknowledge the landlord position while seeking stability.\\n- Culturally appropriate for Dubai: courteous, formal, no legal threats, no ultimatums.\\n- Under 250 words. Include a subject line. Sign off as: Kind regards, [Your Name].\\n\\nReturn ONLY the email text (subject line plus body), no commentary.' }] }) }}", "options": {"timeout": 240000}}, "id": "4f912001-74c4-4088-96ef-05bd742d3fd3", "name": "K2 Draft Email", "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.5, "position": [1104, 128], "credentials": {"httpHeaderAuth": {"id": "utoIEk5C6frUgZIr", "name": "IFM K2 Horizon API"}}}, {"parameters": {"operation": "sendAndWait", "message": "=Here is the draft renewal email prepared for you.\n\n--- DRAFT ---\n{{ $('K2 Draft Email').first().json.choices[0].message.content }}\n\n--- END DRAFT ---\n\nReview it and either paste your edited version below, or type APPROVE to continue unchanged.", "options": {}}, "id": "cb42538e-99c8-4305-97e9-cadfbec37ec7", "name": "Review Draft", "type": "@n8n/n8n-nodes-langchain.chat", "typeVersion": 1.3, "position": [1328, 304], "webhookId": "849e6d37-1b6b-437c-86de-e500489e1757"}, {"parameters": {"conditions": {"options": {"caseSensitive": true, "leftValue": "", "typeValidation": "loose", "version": 2}, "conditions": [{"leftValue": "={{ ($json.chatInput || '').trim().toUpperCase() }}", "operator": {"type": "string", "operation": "equals"}, "rightValue": "APPROVE"}], "combinator": "and"}, "options": {}}, "id": "ff7dec13-b1a0-4191-9f3f-e7c140f30cdf", "name": "Approved or Edited?", "type": "n8n-nodes-base.if", "typeVersion": 2.3, "position": [1552, 304]}, {"parameters": {"method": "POST", "url": "https://api.ifm.ai/v1/chat/completions", "authentication": "genericCredentialType", "genericAuthType": "httpHeaderAuth", "sendBody": true, "specifyBody": "json", "jsonBody": "={{ JSON.stringify({ model: 'IFM/K2-Horizon-375B-A23B', messages: [{ role: 'user', content: 'You are a professional English-to-Arabic translator specialising in UAE business correspondence.\\n\\nTranslate the following English negotiation email into Modern Standard Arabic - formal, polished and respectful, suitable for correspondence with a landlord in Dubai. Keep every fact, number, price and URL exactly as written. Do not add or remove content.\\n\\nENGLISH EMAIL:\\n' + ((($('Review Draft').first().json.chatInput || '').trim().toUpperCase() === 'APPROVE') ? $('K2 Draft Email').first().json.choices[0].message.content : ($('Review Draft').first().json.chatInput || '').trim()) + '\\n\\nFormat your reply exactly as follows:\\nFirst, the full Arabic translation.\\nThen a line containing only: ---ENGLISH GLOSS---\\nThen a concise English gloss - a plain-language rendering of the Arabic so the tenant can double-check the meaning.\\nReturn nothing else - no commentary and no markdown fences.' }] }) }}", "options": {"timeout": 240000}}, "id": "c7c087e0-23b0-417b-af67-ad71642c4dfe", "name": "K2 Translate Arabic", "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.5, "position": [1840, 176], "credentials": {"httpHeaderAuth": {"id": "utoIEk5C6frUgZIr", "name": "IFM K2 Horizon API"}}}, {"parameters": {"method": "POST", "url": "https://api.ifm.ai/v1/chat/completions", "authentication": "genericCredentialType", "genericAuthType": "httpHeaderAuth", "sendBody": true, "specifyBody": "json", "jsonBody": "={{ JSON.stringify({ model: 'IFM/K2-Horizon-375B-A23B', messages: [{ role: 'user', content: 'You are the final quality gate for a bilingual rent renewal email for a Dubai tenant.\\n\\nYou receive a draft containing: the Arabic translation, a line containing only ---ENGLISH GLOSS---, and an English gloss.\\n\\nCheck:\\n1. The Arabic is accurate, natural Modern Standard Arabic with a correct formal register for correspondence with a landlord.\\n2. The tone is polite and respectful, with no aggressive, offensive or legally risky content.\\n3. The Arabic and the English gloss are consistent with each other.\\n\\nIf everything passes, return the final approved text unchanged: the Arabic translation, then the line ---ENGLISH GLOSS---, then the English gloss. If you find issues, fix them minimally and return the corrected text in exactly the same format. Return ONLY the final text - no commentary and no markdown fences.\\n\\nDRAFT TRANSLATION + GLOSS:\\n' + $('K2 Translate Arabic').first().json.choices[0].message.content }] }) }}", "options": {"timeout": 240000}}, "id": "e8eb656b-6f7f-48ae-afb0-8df22585d7ef", "name": "K2 Safety Check", "type": "n8n-nodes-base.httpRequest", "typeVersion": 4.5, "position": [2064, 176], "credentials": {"httpHeaderAuth": {"id": "utoIEk5C6frUgZIr", "name": "IFM K2 Horizon API"}}}, {"parameters": {"message": "=Your final bilingual email is ready - copy it into your email client:\n\n{{ $('K2 Safety Check').first().json.choices[0].message.content }}", "options": {}}, "id": "2cdb6eab-e9e2-4a62-a914-affa17ced6eb", "name": "Send Final Email", "type": "@n8n/n8n-nodes-langchain.chat", "typeVersion": 1.3, "position": [2288, 176], "webhookId": "b89f784d-5806-4c19-81cc-f54cb7989a9a"}, {"parameters": {"content": "## How to run\n\n1. Create two credentials (n8n UI > Credentials > Add credential > \"Header Auth\"):\n   - IFM K2 Horizon API: Name = Authorization, Value = Bearer <your K2 API key>\n   - Apify API: Name = Authorization, Value = Bearer <your Apify token>\n2. Open each HTTP Request node and select the matching credential in the Credential dropdown (K2 nodes = IFM credential, Apify node = Apify credential).\n3. Open the chat (Chat panel or Chat Hub) and describe your home, e.g.\n   i live in dubai marina, 1 bed / 1 bath, 900 sq ft. i pay aed 160k / yr\n4. At the review step, paste your edited email or type APPROVE.\n\nK2 calls target https://api.ifm.ai/v1/chat/completions with model IFM/K2-Horizon-375B-A23B.", "color": 4}, "id": "c00c7ed3-9a08-4c11-9d3a-81b85abe4b07", "name": "Sticky Note 1ee52fed", "type": "n8n-nodes-base.stickyNote", "typeVersion": 1, "position": [112, 304]}, {"parameters": {"content": "## Scraping risk\n\nBayut uses DataDome anti-bot protection. If the scrape returns a captcha page or no items, swap the actor for get_anything/bayut-property-scraper (Camoufox based, about 6 USD per 1,000 results) and keep the same flat input: searchUrl plus maxItems.", "color": 3}, "id": "5e14d868-690c-4632-9fb4-512c555f42fc", "name": "Sticky Note b761afb6", "type": "n8n-nodes-base.stickyNote", "typeVersion": 1, "position": [112, 560]}, {"parameters": {"content": "## Human review\n\nThis step pauses the execution until you reply in the chat. Paste your edited email, or type APPROVE to keep the draft. The default wait limit is 45 minutes.", "color": 6}, "id": "a6d03e89-3e37-457f-bb2d-c611e2ee511a", "name": "Sticky Note 326a6994", "type": "n8n-nodes-base.stickyNote", "typeVersion": 1, "position": [112, 816]}], "connections": {"On New Chat Message": {"main": [[{"node": "K2 Parse Request", "type": "main", "index": 0}]]}, "K2 Parse Request": {"main": [[{"node": "Apify Fetch Bayut Comps", "type": "main", "index": 0}]]}, "Apify Fetch Bayut Comps": {"main": [[{"node": "Shape Market Data", "type": "main", "index": 0}]]}, "Shape Market Data": {"main": [[{"node": "K2 Fairness Verdict", "type": "main", "index": 0}]]}, "K2 Fairness Verdict": {"main": [[{"node": "K2 Draft Email", "type": "main", "index": 0}]]}, "K2 Draft Email": {"main": [[{"node": "Review Draft", "type": "main", "index": 0}]]}, "Review Draft": {"main": [[{"node": "Approved or Edited?", "type": "main", "index": 0}]]}, "Approved or Edited?": {"main": [[{"node": "K2 Translate Arabic", "type": "main", "index": 0}], [{"node": "K2 Translate Arabic", "type": "main", "index": 0}]]}, "K2 Translate Arabic": {"main": [[{"node": "K2 Safety Check", "type": "main", "index": 0}]]}, "K2 Safety Check": {"main": [[{"node": "Send Final Email", "type": "main", "index": 0}]]}}, "pinData": {}, "settings": {"executionOrder": "v1"}}
+{
+  "name": "Dubai Rent Renewal Negotiator",
+  "description": "Dubai rent negotiator: parses rent from chat, pulls live DLD Ejari comps via RapidAPI, drafts an Arabic negotiation email with K2, posts it back to the chat for copy/paste.",
+  "nodes": [
+    {
+      "parameters": {
+        "options": {
+          "responseMode": "responseNodes"
+        }
+      },
+      "id": "64fd1fe3-2466-49a0-aa3c-fbaa595f869b",
+      "name": "On New Chat Message",
+      "type": "@n8n/n8n-nodes-langchain.chatTrigger",
+      "typeVersion": 1.5,
+      "position": [
+        -128,
+        304
+      ],
+      "webhookId": "a2c525fd-58bc-49dc-b816-63b9ed788b40"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.ifm.ai/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'IFM/K2-Horizon-375B-A23B', temperature: 0, max_tokens: 500, messages: [{ role: 'user', content: 'You extract structured data from a message about a Dubai apartment lease renewal.\\n\\nRespond with ONLY one JSON object - no markdown fences and no commentary - with exactly these keys:\\narea: area name in Dubai as stated or best inferred, or an empty string if unknown\\nareaSlug: lowercase hyphenated Bayut area slug (examples: dubai-marina, downtown-dubai, jumeirah-lake-towers, business-bay, palm-jumeirah, dubai-hills-estate, jumeirah-beach-residence, al-barsha, the-greens, motor-city, al-furjan, deira, bur-dubai), or an empty string if the area cannot be resolved\\nbedrooms: integer number of bedrooms (0 for a studio)\\nbathrooms: integer number of bathrooms, or 0 if not stated\\nareaSqft: integer size in square feet, or 0 if not stated\\nannualRentAED: the CURRENT annual rent in AED as an integer - accept formats like 160k, 160,000 or a monthly figure which you multiply by 12 - or 0 if not stated\\nsearchUrl: https://www.bayut.com/for-rent/property/dubai/<areaSlug>/ when areaSlug is known, otherwise https://www.bayut.com/for-rent/property/dubai/\\n\\nUSER MESSAGE:\\n' + ($json.chatInput || '') }] }) }}",
+        "options": {
+          "timeout": 240000
+        }
+      },
+      "id": "32fc8084-d4fe-4e69-8993-2d5b44d92f64",
+      "name": "K2 Parse Request",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        -16,
+        -64
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "utoIEk5C6frUgZIr",
+          "name": "IFM K2 Horizon API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "comps-json",
+              "name": "compsJson",
+              "type": "string",
+              "value": "={{ (function(){ var all=[]; try{ all=$('Fetch Transactions').all().map(function(i){return i.json;}); }catch(e){} var hits=[]; for(var k=0;k<all.length;k++){ var j=all[k]||{}; var h=(((j||{}).data||{}).hits)||j.hits||(Array.isArray(j)?j:[]); if(Array.isArray(h)){ hits=hits.concat(h); } } return JSON.stringify(hits.slice(0,8).map(function(h){ var sqm=parseFloat(h.builtup_area_sqm)||0; return { rentAED: h.transaction_amount, bedrooms: h.beds, areaSqft: sqm?Math.round(sqm*10.7639):0, tower: h.bayut_leaf_location_name_en||'', date: String(h.date_transaction_nk||'').slice(0,10), status: h.rent_contract_renewal_status_name||'' }; })); })() }}"
+            },
+            {
+              "id": "lease-data",
+              "name": "leaseData",
+              "type": "string",
+              "value": "={{ $('K2 Parse Request').first().json.choices[0].message.content }}"
+            },
+            {
+              "id": "user-message",
+              "name": "userMessage",
+              "type": "string",
+              "value": "={{ $('On New Chat Message').first().json.chatInput }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "8a13d4df-c0c3-40a4-b644-0b1ceee50467",
+      "name": "Shape Market Data",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        672,
+        304
+      ],
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.ifm.ai/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'IFM/K2-Horizon-375B-A23B', temperature: 0.2, max_tokens: 800, messages: [{ role: 'user', content: 'You are a Dubai rental market analyst advising a tenant about a lease renewal.\\n\\nTENANT LEASE DATA (JSON with area, bedrooms, bathrooms, areaSqft, annualRentAED):\\n' + ($json.leaseData || '') + '\\n\\nCOMPARABLE TRANSACTIONS (JSON array, live DLD-registered Ejari rental transactions for this area - actual transacted rents, stronger evidence than asking prices):\\n' + ($json.compsJson || '') + '\\n\\nProduce a concise market verdict:\\n1. VERDICT: fair, above market, or below market.\\n2. PERCENTAGE: the approximate percentage difference between the annual rent and the median of the comparable transactions - state the median value.\\n3. EVIDENCE: cite 3 to 5 specific transactions with annual rent, bedrooms, tower and date.\\n4. RECOMMENDED RANGE: a reasonable target annual rent range in AED for the negotiation.\\n\\nOnly use the transactions provided - never invent transactions or rents. If the comparable list is empty, say clearly that live data was unavailable and give a cautious qualitative answer based only on the lease data. Keep the whole analysis under 250 words.' }] }) }}",
+        "options": {
+          "timeout": 240000
+        }
+      },
+      "id": "ee8a39db-cec9-4309-a60c-fc5c1de44203",
+      "name": "K2 Fairness Verdict",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        896,
+        -32
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "utoIEk5C6frUgZIr",
+          "name": "IFM K2 Horizon API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.ifm.ai/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'IFM/K2-Horizon-375B-A23B', temperature: 0.6, max_tokens: 1500, messages: [{ role: 'user', content: 'You draft polite, persuasive rent renewal negotiation emails for tenants in Dubai. You specialize in Arabic culture negotiation and are sensitive to customs and norms of behavior and language.\\n\\nOUTPUT RULE: Output ONLY ARABIC LANGUAGE for the finished email text. Do not explain, analyze, narrate, or show any reasoning, planning, or preamble - the very first character of your reply must be the start of the subject line.\\n\\nUSER CONTEXT (original message):\\n' + $('Shape Market Data').first().json.userMessage + '\\n\\nMARKET ANALYSIS:\\n' + $('K2 Fairness Verdict').first().json.choices[0].message.content + '\\n\\nCOMPARABLE TRANSACTIONS (JSON, DLD-registered Ejari rents):\\n' + $('Shape Market Data').first().json.compsJson + '\\n\\nDraft a professional, respectful email in Arabic to the landlord about the rent renewal. Requirements:\\n- Reference specific comparable transactions as evidence, with rents and tower names.\\n- If the rent is above market, request a reduction or a capped increase, citing the evidence.\\n- If the rent is fair, confirm the renewal warmly.\\n- If the rent is below market, acknowledge the landlord position while seeking stability.\\n- Culturally appropriate for Dubai: courteous, formal, no legal threats, no ultimatums.\\n- Under 250 words. Include a subject line. Sign off as: Kind regards, [Your Name].' }] }) }}",
+        "options": {
+          "timeout": 240000
+        }
+      },
+      "id": "4f912001-74c4-4088-96ef-05bd742d3fd3",
+      "name": "K2 Draft Email",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        1120,
+        -32
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "utoIEk5C6frUgZIr",
+          "name": "IFM K2 Horizon API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## How to run\n\n1. Create two credentials (n8n UI > Credentials > Add credential > \"Header Auth\"):\n   - IFM K2 Horizon API: Name = Authorization, Value = Bearer <your K2 API key>\n   - RapidAPI Key: Name = x-rapidapi-key, Value = <your RapidAPI key> (subscribed to happyendpoint/uae-real-estate3)\n2. Open each HTTP Request node and select the matching credential (K2 nodes = IFM credential, Resolve/Fetch nodes = RapidAPI Key). The RapidAPI nodes also send header x-rapidapi-host via Send Headers.\n3. Open the chat and describe your home, e.g.\n   i live in dubai marina, 1 bed / 1 bath, 900 sq ft. i pay aed 160k / yr\n4. The finished Arabic email is posted straight back into the chat - copy it into your mail client.\n\nK2 calls target https://api.ifm.ai/v1/chat/completions with model IFM/K2-Horizon-375B-A23B. Comps come from DLD-registered Ejari transactions via RapidAPI.",
+        "height": 400,
+        "width": 480,
+        "color": 4
+      },
+      "id": "c00c7ed3-9a08-4c11-9d3a-81b85abe4b07",
+      "name": "Sticky Note 1ee52fed",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -720,
+        -96
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://uae-real-estate3.p.rapidapi.com/autocomplete",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "query",
+              "value": "={{ (function(){ var raw=''; try{ raw=$('K2 Parse Request').first().json.choices[0].message.content||''; }catch(e){} var m=raw.match(/\"area\"\\s*:\\s*\"([^\"]+)\"/); return (m&&m[1])?m[1]:'dubai'; })() }}"
+            },
+            {
+              "name": "page",
+              "value": "0"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-rapidapi-host",
+              "value": "uae-real-estate3.p.rapidapi.com"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "1de173ee-09d4-4513-92c8-c73a0bbdab0e",
+      "name": "Resolve Location",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        400,
+        304
+      ],
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "RgJicXfrGiox7Elk",
+          "name": "RapidAPI Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "https://uae-real-estate3.p.rapidapi.com/transactions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "purpose",
+              "value": "for-rent"
+            },
+            {
+              "name": "time_period",
+              "value": "12m"
+            },
+            {
+              "name": "page",
+              "value": "1"
+            },
+            {
+              "name": "location_ids",
+              "value": "={{ (function(){ try{ var r=$('Resolve Location').first().json; var locs=(((r||{}).data||{}).locations)||r.locations||[]; var f=locs[0]||{}; return String(f.externalID||''); }catch(e){ return ''; } })() }}"
+            },
+            {
+              "name": "beds",
+              "value": "={{ (function(){ var raw=''; try{ raw=$('K2 Parse Request').first().json.choices[0].message.content||''; }catch(e){} var m=raw.match(/\"bedrooms\"\\s*:\\s*(\\d+)/); return (m&&m[1])?m[1]:'1'; })() }}"
+            },
+            {
+              "name": "area_min",
+              "value": "={{ (function(){ var raw=''; try{ raw=$('K2 Parse Request').first().json.choices[0].message.content||''; }catch(e){} var m=raw.match(/\"areaSqft\"\\s*:\\s*(\\d+)/); var s=(m&&+m[1])?+m[1]:0; return s?Math.round(s*0.8):0; })() }}"
+            },
+            {
+              "name": "area_max",
+              "value": "={{ (function(){ var raw=''; try{ raw=$('K2 Parse Request').first().json.choices[0].message.content||''; }catch(e){} var m=raw.match(/\"areaSqft\"\\s*:\\s*(\\d+)/); var s=(m&&+m[1])?+m[1]:0; return s?Math.round(s*1.2):2000000; })() }}"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-rapidapi-host",
+              "value": "uae-real-estate3.p.rapidapi.com"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "55396ec4-dd0f-46e5-8f44-013cce29bb6b",
+      "name": "Fetch Transactions",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        560,
+        304
+      ],
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "RgJicXfrGiox7Elk",
+          "name": "RapidAPI Key"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "email-text",
+              "name": "emailText",
+              "type": "string",
+              "value": "={{ $('K2 Draft Email').first().json.choices[0].message.content }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "4dd42b95-360f-481c-ba7b-3c9e734aef52",
+      "name": "Output Arabic Email Text",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        1344,
+        -32
+      ],
+      "notes": "Plain text field with the drafted email - open the node output and copy/paste it."
+    },
+    {
+      "parameters": {
+        "message": "={{ $json.emailText }}",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.chat",
+      "typeVersion": 1.3,
+      "position": [
+        1568,
+        -32
+      ],
+      "id": "70f919f9-8478-4442-b672-47af903676a4",
+      "name": "Copy Email",
+      "webhookId": "d9e4d32f-7bd0-4158-a3dd-cc71a2dc660e"
+    },
+    {
+      "id": "8bbe2d45-5278-41d3-9330-b67185da74d5",
+      "name": "Sticky Note HITL Removed",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1800,
+        -32
+      ],
+      "parameters": {
+        "color": 4,
+        "content": "For ease of judging and to speed the demo to conclusion, we eliminated human-in-the-loop review. This is intentional.",
+        "height": 200,
+        "width": 360
+      }
+    }
+  ],
+  "connections": {
+    "On New Chat Message": {
+      "main": [
+        [
+          {
+            "node": "K2 Parse Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Shape Market Data": {
+      "main": [
+        [
+          {
+            "node": "K2 Fairness Verdict",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "K2 Fairness Verdict": {
+      "main": [
+        [
+          {
+            "node": "K2 Draft Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "K2 Draft Email": {
+      "main": [
+        [
+          {
+            "node": "Output Arabic Email Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "K2 Parse Request": {
+      "main": [
+        [
+          {
+            "node": "Resolve Location",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Resolve Location": {
+      "main": [
+        [
+          {
+            "node": "Fetch Transactions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Transactions": {
+      "main": [
+        [
+          {
+            "node": "Shape Market Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Output Arabic Email Text": {
+      "main": [
+        [
+          {
+            "node": "Copy Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "nodeGroups": [
+    {
+      "id": "bbfeaab5-4a92-4e35-90f8-20676854d890",
+      "name": "Parse & Locate",
+      "nodeIds": [
+        "32fc8084-d4fe-4e69-8993-2d5b44d92f64"
+      ],
+      "description": "K2 extracts area, bedrooms, size and current rent from the chat message."
+    },
+    {
+      "id": "1f97103e-68ca-46f4-a1b8-734234f627b5",
+      "name": "Market Scan",
+      "nodeIds": [
+        "1de173ee-09d4-4513-92c8-c73a0bbdab0e",
+        "55396ec4-dd0f-46e5-8f44-013cce29bb6b",
+        "8a13d4df-c0c3-40a4-b644-0b1ceee50467"
+      ],
+      "description": "Resolves area to location ID, fetches live DLD Ejari transactions, shapes tight comps JSON."
+    },
+    {
+      "id": "52891243-e41d-4a44-8635-386ea373fc46",
+      "name": "Fairness Analysis & Draft",
+      "nodeIds": [
+        "ee8a39db-cec9-4309-a60c-fc5c1de44203",
+        "4f912001-74c4-4088-96ef-05bd742d3fd3"
+      ],
+      "description": "K2 compares the current rent against the comps (verdict, percentage, cited listings) and drafts a polite negotiation email."
+    },
+    {
+      "id": "24686efe-9c95-4339-9110-f79baeb0df5b",
+      "name": "Deliver negotiation email",
+      "nodeIds": [
+        "4dd42b95-360f-481c-ba7b-3c9e734aef52",
+        "70f919f9-8478-4442-b672-47af903676a4"
+      ],
+      "description": "Posts the finished Arabic draft back into the chat so you can copy it straight into your mail client."
+    }
+  ]
+}
